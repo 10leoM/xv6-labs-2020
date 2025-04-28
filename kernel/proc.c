@@ -127,6 +127,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // 初始化mask为0
+  p->mask=0;
+
   return p;
 }
 
@@ -266,6 +269,9 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
+
+  // copy trace mask
+  np->mask=p->mask;
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
@@ -692,4 +698,18 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 getproc()
+{
+  uint64 sum=0;
+  
+  for(int i=0;i<NPROC;i++)
+  {
+    acquire(&proc[i].lock);
+    if(proc[i].state!=UNUSED)
+    sum++;
+    release(&proc[i].lock);
+  }
+  return sum;
 }

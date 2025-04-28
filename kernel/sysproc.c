@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -94,4 +95,35 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// 内核态下的trace函数
+uint64
+sys_trace(void)
+{
+  int n;
+  if(argint(0,&n)<0)            // 获取trace的参数
+  return -1;
+  myproc()->mask|=n;
+  return 0;  
+}
+
+// 内核态下的sysinfo函数，要实现把struct sysinfo复制到用户页表
+// int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+extern uint64 getfreemem();
+extern uint64 getproc();
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr;
+  if(argaddr(0,&addr)<0)
+  return -1;
+  
+  struct sysinfo info;
+  info.freemem=getfreemem();
+  info.nproc=getproc(); 
+  struct proc *p=myproc();
+  if(copyout(p->pagetable,addr,(char *)&info,sizeof(struct sysinfo))<0)
+  return -1;
+  return 0;
 }

@@ -14,6 +14,7 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+// proc链表
 struct run {
   struct run *next;
 };
@@ -30,6 +31,7 @@ kinit()
   freerange(end, (void*)PHYSTOP);
 }
 
+// 逐页释放内存，然后加入到kmem中
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -43,6 +45,7 @@ freerange(void *pa_start, void *pa_end)
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
+// 释放pa并加入到kmem链表中
 void
 kfree(void *pa)
 {
@@ -79,4 +82,18 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+uint64 getfreemem()
+{
+  uint64 sum=0;
+  struct run *r=kmem.freelist;
+  acquire(&kmem.lock);
+  while(r)
+  {
+    sum+=PGSIZE;
+    r=r->next;
+  }
+  release(&kmem.lock);
+  return sum;
 }
