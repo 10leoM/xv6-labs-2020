@@ -1,6 +1,6 @@
 # syscall解决方案
-lab要求：Lab: System calls
-实验解决方案按照lab要求储存在对应文件夹
+- lab要求：Lab: System calls
+- 实验解决方案按照lab要求储存在对应文件夹
 
 xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
 Version 6 (v6).  xv6 loosely follows the structure and style of v6,
