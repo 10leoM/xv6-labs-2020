@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -89,6 +90,7 @@ allocpid() {
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
+extern pagetable_t kernel_pagetable;
 static struct proc*
 allocproc(void)
 {
@@ -127,6 +129,23 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // 初始化kpagetable
+  if((p->kpagetable=ukvminit())==0)
+  {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  
+  // 映射kernel stack,已经在procinit创建
+  uint64 va = KSTACK((int) (p - proc));                                           // 获取进程的虚拟地址
+  pte_t pa = kvmpa(p->kstack);                                                   // 获取物理地址
+  ukvmmap(p->kpagetable, va, pa, PGSIZE, PTE_R | PTE_W);                          // 映射对应的kernel stack
+  /*
+  printf("\n\npa: %p\n\n",pa);
+  vmprint_diff(p->kpagetable, kernel_pagetable);
+  内核栈的物理地址在0x0000000087f77000~0x0000000087fb6000，第一个进程的kstack是0x0000000087fb5000，如果有除了内核栈以外的差别就是映射有错的
+  */
   return p;
 }
 
@@ -141,6 +160,8 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kpagetable)
+    proc_freekpagetable(p);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -190,9 +211,27 @@ proc_pagetable(struct proc *p)
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
-  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  uvmunmap(pagetable, TRAMPOLINE, 1, 0);              
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+// 释放内核页表
+extern char etext[];
+void 
+proc_freekpagetable(struct proc *p)
+{
+  pagetable_t kpagetable = p->kpagetable;
+  ukvmunmap(kpagetable, UART0, 1);
+  ukvmunmap(kpagetable, VIRTIO0, 1);
+  ukvmunmap(kpagetable, CLINT, 0x10000/PGSIZE);
+  ukvmunmap(kpagetable, PLIC, 0x400000/PGSIZE);
+  ukvmunmap(kpagetable, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE);
+  ukvmunmap(kpagetable, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE);
+  ukvmunmap(kpagetable, TRAMPOLINE, 1);
+  ukvmunmap(kpagetable, p->kstack, 1);
+
+  kfreewalk(kpagetable);
 }
 
 // a user program that calls exec("/init")
@@ -453,6 +492,7 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+//    进程调度器，从进程列表中选取一个可运行的进程（RUNNABLE），并通过上下文切换（swtch）将 CPU 控制权交给该进程
 void
 scheduler(void)
 {
@@ -473,10 +513,14 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        swtch(&c->context, &p->context);
+        // 切换到内核页表
+        w_satp(MAKE_SATP(p->kpagetable));                                       // 设置 satp 寄存器，虚拟地址转换​的核心寄存器
+        sfence_vma();                                                           // 刷新 TLB
+        swtch(&c->context, &p->context);                                        // 切换上下文并执行，能返回多次，后面swtch会回到这个位置继续
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();                                                          // 恢复全局内核页表
         c->proc = 0;
 
         found = 1;
@@ -486,7 +530,7 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
-      asm volatile("wfi");
+      asm volatile("wfi");            // 等待中断唤醒
     }
 #else
     ;

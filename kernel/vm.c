@@ -68,6 +68,8 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+//   返回目标虚拟地址对应的 ​第三级（Level 0）PTE 指针
+//   alloc=1表示如果没有就允许分配新的页表页
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
@@ -81,8 +83,8 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
-      memset(pagetable, 0, PGSIZE);
-      *pte = PA2PTE(pagetable) | PTE_V;
+      memset(pagetable, 0, PGSIZE);                 // 初始化新页表页
+      *pte = PA2PTE(pagetable) | PTE_V;             // 设置当前 PTE 指向新(物理)页表
     }
   }
   return &pagetable[PX(0, va)];
@@ -125,6 +127,7 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 // a physical address. only needed for
 // addresses on the stack.
 // assumes va is page aligned.
+// 将"​内核"虚拟地址转换为物理地址，函数中已完成三级页表遍历操作(walk)
 uint64
 kvmpa(uint64 va)
 {
@@ -145,6 +148,7 @@ kvmpa(uint64 va)
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+// 页表中建立虚拟地址到物理地址的连续映射，其核心作用是为一段虚拟内存区域（va 到 va + size）创建对应的页表项（PTE），将其映射到物理内存（pa 开始的连续区域）
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -153,16 +157,14 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
-  for(;;){
-    if((pte = walk(pagetable, a, 1)) == 0)
-      return -1;
-    if(*pte & PTE_V)
-      panic("remap");
-    *pte = PA2PTE(pa) | perm | PTE_V;
-    if(a == last)
-      break;
-    a += PGSIZE;
-    pa += PGSIZE;
+  for(;;) {
+    pte = walk(pagetable, a, 1);      // 获取当前页的PTE，若需要则分配页表页
+    if (!pte) return -1;              // 分配失败
+    if (*pte & PTE_V) panic("remap"); // 检查重复映射
+    *pte = PA2PTE(pa) | perm | PTE_V; // 设置PTE内容
+    if (a == last) break;             // 是否处理完最后一页？
+    a += PGSIZE;                      // 下一虚拟页
+    pa += PGSIZE;                     // 下一物理页
   }
   return 0;
 }
@@ -170,6 +172,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
+// 删除用户页表的映射，选择是否清除对应物理内存
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
@@ -190,6 +193,29 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+    *pte = 0;
+  }
+}
+
+// 删除映射
+void
+ukvmunmap(pagetable_t kpagetable, uint64 va, uint npages)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("kuvmunmap: not aligned");
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(kpagetable, a, 0)) == 0)
+      goto clean;
+    if((*pte & PTE_V) == 0)
+      goto clean;
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("kuvmunmap: not a leaf");
+
+    clean:
     *pte = 0;
   }
 }
@@ -289,6 +315,28 @@ freewalk(pagetable_t pagetable)
   kfree((void*)pagetable);
 }
 
+// Recursively free page-table pages similar to freewalk
+// not need to already free leaf node
+// 和freewalk一模一样, 除了不再出panic错当一个page的leaf还没被清除掉
+// 因为当我们free pagetable和kpagetable的时候
+// 只有1份物理地址, 且原本free pagetable的函数会负责清空它们
+// 所以这个函数只需要把在kpagetable里所有间接mapping清除即可
+void
+kfreewalk(pagetable_t kpagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = kpagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      kfreewalk((pagetable_t)child);
+    }
+    kpagetable[i] = 0;
+  }
+  kfree((void*)kpagetable);
+}
+
 // Free user memory pages,
 // then free page-table pages.
 void
@@ -298,6 +346,8 @@ uvmfree(pagetable_t pagetable, uint64 sz)
     uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 1);
   freewalk(pagetable);
 }
+
+
 
 // Given a parent process's page table, copy
 // its memory into a child's page table.
@@ -347,6 +397,37 @@ uvmclear(pagetable_t pagetable, uint64 va)
     panic("uvmclear");
   *pte &= ~PTE_U;
 }
+
+void
+ukvmmap(pagetable_t kpagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kpagetable, va, sz, pa, perm) != 0)
+    panic("ukvmmap");
+}
+/*
+ * 初始化kpagetable，在allocproc中调用
+ */
+pagetable_t
+ukvminit()
+{
+  pagetable_t kpagetable = (pagetable_t)kalloc();
+  if (kpagetable == 0) {
+    return kpagetable;
+  }
+  memset(kpagetable, 0, PGSIZE);
+
+  ukvmmap(kpagetable,UART0, UART0, PGSIZE, PTE_R | PTE_W);                                          // 串口设备
+  ukvmmap(kpagetable,VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);                                      // 磁盘设备
+  ukvmmap(kpagetable,CLINT, CLINT, 0x10000, PTE_R | PTE_W);                                         // 定时器
+  ukvmmap(kpagetable,PLIC, PLIC, 0x400000, PTE_R | PTE_W);                                          // 中断控制器
+  ukvmmap(kpagetable,KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);                    // 内核text段
+  ukvmmap(kpagetable,(uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);           // 内核data和物理RAM
+  ukvmmap(kpagetable,TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);                        // trmpoline段
+
+  
+  return kpagetable;
+}
+
 
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
@@ -439,6 +520,47 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+void vmprint_diff_helper(char *prefix, pagetable_t p1, pagetable_t p2, int dep)
+{
+  for(int i=0;i<512;i++)
+  {
+    pte_t pte1 = p1[i];
+    pte_t pte2 = p2[i];
+    // 生成当前层级的路径标识（例如 "..0"）
+    char current_level[64];
+    snprintf(current_level, sizeof(current_level), "%s..%d", prefix, i);
+    
+    if((pte1 & PTE_V) != (pte2 & PTE_V))
+      {
+        if(pte1 & PTE_V)
+          printf("%s: pte1 %p pa %p\n", current_level, pte1, PTE2PA(pte1));
+        if(pte2 & PTE_V)
+          printf("%s: pte2 %p pa %p\n", current_level, pte2, PTE2PA(pte2));
+        // panic("fuck");
+      }
+    if(pte1 & PTE_V)
+    {
+      if(PTE2PA(pte1)!=PTE2PA(pte2)&&dep==2)
+        {
+          printf("%s: pte1 %p pa %p\n", current_level, pte1, PTE2PA(pte1));
+          printf("%s: pte2 %p pa %p\n", current_level, pte2, PTE2PA(pte2));
+          panic("pagetabl diff:p1 != p2");
+        }
+      if(dep<2)
+        vmprint_diff_helper(current_level, (pagetable_t)PTE2PA(pte1), (pagetable_t)PTE2PA(pte2), dep+1);
+      
+    }
+  }
+}
+
+void vmprint_diff(pagetable_t p1, pagetable_t p2)
+{
+  printf("pagetable diff\n");
+  char current_level[64];
+  vmprint_diff_helper(current_level,p1,p2,0);
+  printf("p1 == p2\n");
 }
 
 void vmprint_helper(pagetable_t pt,int dep)
