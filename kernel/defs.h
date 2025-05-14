@@ -185,6 +185,8 @@ int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 void            vmprint(pagetable_t);
 void            vmprint_diff(pagetable_t, pagetable_t);
+int             ukvmcopy(pagetable_t oldpage, pagetable_t newpage, uint64 start, uint64 end);                   // 新增
+
 // plic.c
 void            plicinit(void);
 void            plicinithart(void);

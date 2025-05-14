@@ -169,6 +169,26 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   return 0;
 }
 
+// 3-3使用的umappages，不panic
+int
+umappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  uint64 a, last;
+  pte_t *pte;
+
+  a = PGROUNDDOWN(va);
+  last = PGROUNDDOWN(va + size - 1);
+  for(;;) {
+    pte = walk(pagetable, a, 1);      // 获取当前页的PTE，若需要则分配页表页
+    if (!pte) return -1;              // 分配失败
+    *pte = PA2PTE(pa) | perm | PTE_V; // 设置PTE内容
+    if (a == last) break;             // 是否处理完最后一页？
+    a += PGSIZE;                      // 下一虚拟页
+    pa += PGSIZE;                     // 下一物理页
+  }
+  return 0;
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
@@ -385,6 +405,36 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+int
+ukvmcopy(pagetable_t oldpage, pagetable_t newpage, uint64 start, uint64 end)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  start = PGROUNDUP(start);
+  // vmprint(oldpage);
+  // printf("\n");
+  // vmprint_diff(newpage, kernel_pagetable);
+
+  for (i = start; i < end; i += PGSIZE) {
+    if ((pte = walk(oldpage, i, 0)) == 0)
+      panic("pagecopy walk oldpage nullptr");
+    if ((*pte & PTE_V) == 0)
+      panic("pagecopy oldpage pte not valid");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte) & (~PTE_U); // 把Uflag抹去
+    if (umappages(newpage, i, PGSIZE, pa, flags) != 0) {
+      goto err;
+    }
+  }
+  // vmprint_diff(newpage, kernel_pagetable);
+  return 0;
+
+err:
+  uvmunmap(newpage, 0, i / PGSIZE, 1);
+  return -1;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -454,29 +504,32 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   return 0;
 }
 
+int copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len);
+int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  // uint64 n, va0, pa0;
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+  // while(len > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > len)
+  //     n = len;
+  //   memmove(dst, (void *)(pa0 + (srcva - va0)), n);
 
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  //   len -= n;
+  //   dst += n;
+  //   srcva = va0 + PGSIZE;
+  // }
+  // return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -486,40 +539,41 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
+  // uint64 n, va0, pa0;
+  // int got_null = 0;
 
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
+  // while(got_null == 0 && max > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > max)
+  //     n = max;
 
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
+  //   char *p = (char *) (pa0 + (srcva - va0));
+  //   while(n > 0){
+  //     if(*p == '\0'){
+  //       *dst = '\0';
+  //       got_null = 1;
+  //       break;
+  //     } else {
+  //       *dst = *p;
+  //     }
+  //     --n;
+  //     --max;
+  //     p++;
+  //     dst++;
+  //   }
 
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  //   srcva = va0 + PGSIZE;
+  // }
+  // if(got_null){
+  //   return 0;
+  // } else {
+  //   return -1;
+  // }
+  return copyinstr_new(pagetable, dst, srcva, max);
 }
 
 void vmprint_diff_helper(char *prefix, pagetable_t p1, pagetable_t p2, int dep)
@@ -533,14 +587,14 @@ void vmprint_diff_helper(char *prefix, pagetable_t p1, pagetable_t p2, int dep)
     snprintf(current_level, sizeof(current_level), "%s..%d", prefix, i);
     
     if((pte1 & PTE_V) != (pte2 & PTE_V))
-      {
+    {
         if(pte1 & PTE_V)
           printf("%s: pte1 %p pa %p\n", current_level, pte1, PTE2PA(pte1));
         if(pte2 & PTE_V)
           printf("%s: pte2 %p pa %p\n", current_level, pte2, PTE2PA(pte2));
-        // panic("fuck");
-      }
-    if(pte1 & PTE_V)
+          // panic("fuck");
+    }
+    else if(pte1 & PTE_V)
     {
       if(PTE2PA(pte1)!=PTE2PA(pte2)&&dep==2)
         {

@@ -1,7 +1,6 @@
 # init.gdb
 file kernel/kernel
-b allocproc
-b proc_freekpagetable
+b ukvmcopy
 b scheduler
 c
 layout src
