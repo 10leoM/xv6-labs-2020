@@ -505,5 +505,12 @@ sys_sigalarm(void)
 // 新增
 uint64 sys_sigreturn(void)
 {
+  struct proc *p=myproc();
+  // 无效调用
+  if(p->inalarm==0||p->alarmtrapframe==0)
+    return -1;
+
+  *p->trapframe=*p->alarmtrapframe;
+   p->inalarm=0;                                 // 清除，已调用完成
   return 0;
 }

@@ -80,13 +80,16 @@ usertrap(void)
   if(which_dev == 2)
   {
     // 启用警报
-    if(p->interval>0)
+    if(p->interval>0&&p->inalarm==0)
     {
       // 启动
       if(--p->left_tick<=0)
       {
+        // 保存trapframe
+        *p->alarmtrapframe=*p->trapframe;
         p->left_tick=p->interval;
         p->trapframe->epc=p->handler;
+        p->inalarm=1;
       }
     }
     yield();

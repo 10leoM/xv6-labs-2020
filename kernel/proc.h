@@ -106,4 +106,6 @@ struct proc {
   int interval;                // 警报间隔
   uint64 handler;              // 警报处理函数
   int left_tick;               // 剩余的时间   
+  struct trapframe *alarmtrapframe;   // 调用alarm后的栈帧
+  int inalarm;                 // alarm是否正在运行
 };
