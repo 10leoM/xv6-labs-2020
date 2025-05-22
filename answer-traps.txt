@@ -1,0 +1,30 @@
+000000000000001c <main>:
+
+void main(void) {
+  1c:	1141                	addi	sp,sp,-16
+  1e:	e406                	sd	ra,8(sp)
+  20:	e022                	sd	s0,0(sp)
+  22:	0800                	addi	s0,sp,16
+  printf("%d %d\n", f(8)+1, 13);
+  24:	4635                	li	a2,13
+  26:	45b1                	li	a1,12
+  28:	00000517          	auipc	a0,0x0                              # a0=(0x0<<12)+pc=0x28
+  2c:	7a850513          	addi	a0,a0,1960 # 7d0 <malloc+0xea>      # a0=a0+0x7A8=0x7D0
+  30:	00000097          	auipc	ra,0x0                              # ra=(0x0<<12)+pc
+  34:	5f8080e7          	jalr	1528(ra) # 628 <printf>             # 
+  exit(0);
+  38:	4501                	li	a0,0
+  3a:	00000097          	auipc	ra,0x0
+  3e:	276080e7          	jalr	630(ra) # 2b0 <exit>
+
+1.根据手册a0~a7包含函数参数，13在a2
+
+2.被内联优化了，在li a1,12前就已完成f(g(x)+1)的操作
+
+3.0000000000000628是printf地址
+
+4.a0是第一个参数，存储"%d %d\n"的地址，ra=0x30,1528(ra)->其实就是跳转到ra+0x5F8=0x628,jalr后压入下一个pc地址0x38
+
+5.输出是HE110 World，57616的hex是0x0000E110，i=0x00646c72, 字节翻译是0dlr，由于risv是小端序，所以是rld0，如果是大端序，那就是i=0x726c6400
+
+6.无固定输出，看调用printf前a2是什么

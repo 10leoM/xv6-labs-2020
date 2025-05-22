@@ -121,6 +121,7 @@ panic(char *s)
   printf("panic: ");
   printf(s);
   printf("\n");
+  backtrace();
   panicked = 1; // freeze uart output from other CPUs
   for(;;)
     ;
@@ -131,4 +132,20 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+// 在sys_sleep和panic调用回溯查看栈帧返回地址
+// curfp-8是返回地址，curfp-16是上一个栈帧首地址
+void            
+backtrace(void)
+{
+  uint64 curfp = r_fp();
+  uint64 st_top = PGROUNDUP(curfp);
+  // printf("top:%p\n",st_top);
+  printf("backtrace\n");
+  for(;curfp<st_top;curfp=*(uint64 *)(curfp-16))
+  {
+    printf("%p\n",*(uint64 *)(curfp-8));
+  }
+  //printf("last:%p\n",curfp);
 }

@@ -484,3 +484,17 @@ sys_pipe(void)
   }
   return 0;
 }
+
+// 新增
+uint64 
+sys_sigalarm(void)
+{
+
+  return 0;
+}
+
+// 新增
+uint64 sys_sigreturn(void)
+{
+  return 0;
+}
