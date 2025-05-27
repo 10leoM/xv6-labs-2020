@@ -1,5 +1,5 @@
 #util解决方案
-lab要求：Lab: Xv6 and Unix utilities (mit.edu)
+- lab要求：Lab: Xv6 and Unix utilities (mit.edu)
 
 
 <!-- xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
