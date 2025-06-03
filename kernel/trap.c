@@ -65,7 +65,22 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  else if(r_scause() == 13 || r_scause() == 15)                         // 新增处理页面错误
+  {
+    printf("page fault trap: signal %d at address %p\n", r_scause(), r_stval());
+    if(r_stval() >= p->sz || r_stval() <p->trapframe->sp)          // 超过进程边界或栈边界
+    {
+        p->killed=1;
+        goto kill;
+    }
+    if(uvmlazyalloc(p->pagetable, r_stval())!=0)
+    {
+      p->killed=1;
+      goto kill;
+    }
+  }
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -73,6 +88,7 @@ usertrap(void)
     p->killed = 1;
   }
 
+kill:
   if(p->killed)
     exit(-1);
 
