@@ -296,6 +296,15 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  for(int i = 0; i < 16; i++) 
+  {
+    if(p->vmas[i].used) 
+    {
+       np->vmas[i] = p->vmas[i]; // 结构体复制
+       filedup(np->vmas[i].file); // 增加文件引用
+    }
+  }
+  
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -345,6 +354,13 @@ exit(int status)
     panic("init exiting");
 
   // Close all open files.
+  for(int i=0;i<16;i++)
+  {
+    if(p->vmas[i].used)
+    {
+      fileclose(p->vmas[i].file);
+    }
+  }
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
       struct file *f = p->ofile[fd];

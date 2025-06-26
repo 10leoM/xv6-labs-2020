@@ -15,7 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
-
+#include "memlayout.h"
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -482,5 +482,111 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+// mmap系统调用
+uint64 sys_mmap(void)
+{
+  // 获取参数
+  uint64 vaddr;
+  uint64 length;
+  int prot;
+  int flags;
+  int fd;
+  uint64 offset;
+  struct file *f;
+  if(argaddr(0,&vaddr)<0)
+    return -1;
+  if(argaddr(1,&length)<0)
+    return -1;
+  if(argint(2,&prot))
+    return -1;
+  if(argint(3,&flags)<0)
+    return -1;
+  if(argfd(4,&fd, &f)<0)
+    return -1;
+  if(argaddr(5,&offset)<0)
+    return -1;
+  printf("Log--mmap(%p, %p, %d, %d, %d, %p)\n",vaddr, length, prot, flags, fd, offset);
+  // 禁止只读的文件以写方式且共享mmap
+  if(!f->writable && (prot & PROT_WRITE) && (flags & MAP_SHARED)) 
+      return -1;
+
+  struct proc *p = myproc();
+
+  // 寻找可用的vmas
+  for(int i=0;i<16;i++)
+  {
+    if(p->vmas[i].used==0)
+    {
+      p->vmas[i].vaddr = p->sz;
+      p->vmas[i].length = length;
+      p->vmas[i].prot = prot;
+      p->vmas[i].flags = flags;
+      p->vmas[i].file = f;
+      p->vmas[i].offset = offset;
+      p->vmas[i].fd = fd;
+      p->vmas[i].used = 1;
+      p->sz += length;                  // 增加进程大小
+      filedup(f);                       // 增加引用计数
+      return p->vmas[i].vaddr;          // 返回地址
+    }
+  }
+  
+  return -1;
+}
+
+// munmap系统调用
+uint64 sys_munmap(void)
+{
+  uint64 vaddr;
+  uint64 length;
+  if(argaddr(0,&vaddr)<0)
+    return -1;
+  if(argaddr(1,&length)<0)
+    return -1;
+  vaddr = PGROUNDDOWN(vaddr);
+  length = PGROUNDUP(length);
+  printf("Log--munmap(%p, %p)\n", vaddr, length);
+
+  struct proc *p = myproc();
+  struct vma *v = 0;
+  for(int i=0;i<16;i++)
+  {
+    if(p->vmas[i].used && vaddr>=p->vmas[i].vaddr && vaddr<(p->vmas[i].vaddr+p->vmas[i].length))
+    {
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(!v)
+    return -1;
+  
+  // 取消映射如果时MAP_SHARED要写回，然后uvmunmap取消映射,减少引用计数，最后删除vmas的信息
+  if(v->flags & MAP_SHARED)
+  {
+    // filewrite(struct file *f, uint64 addr, int n)
+    if(filewrite(v->file, vaddr, length)==-1)
+      printf("munmap: filewrite < 0\n");
+  }
+  // 取消映射并释放,要分情况，可能不是取消整个
+  uvmunmap(p->pagetable, vaddr, length/PGSIZE, 1);
+  if(vaddr == v->vaddr && v->length == length)      // 取消整个
+  {
+    fileclose(v->file);
+    v->used = 0;
+  }
+  else if(vaddr == v->vaddr)                        // 包括头部
+  {
+    v->vaddr+=length;
+    v->length-=length;
+    v->offset += length;
+  }
+  else if(vaddr+length == v->vaddr+v->length)
+    v->length-=length;
+  else
+    panic("既不包含头部也不包含尾部");
+
   return 0;
 }

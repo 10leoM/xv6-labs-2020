@@ -80,6 +80,18 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+struct vma
+{
+  int used;            // 是否使用
+  uint64 vaddr;        // 映射起始虚拟地址
+  uint64 length;       // 映射长度
+  int prot;            // 权限 (PROT_READ, PROT_WRITE)
+  int flags;           // 标志 (MAP_SHARED, MAP_PRIVATE)
+  int fd;              // 文件描述符
+  struct file *file;   // 映射文件
+  uint64 offset;       // 文件偏移
+};
+
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -103,4 +115,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vma vmas[16];          // mmap打开的文件
 };

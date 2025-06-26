@@ -1,10 +1,14 @@
 #include "types.h"
+#include "fcntl.h"
 #include "param.h"
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,12 +71,66 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }
+  else if(r_scause() == 13 || r_scause() == 15)
+  {
+    uint64 va = PGROUNDDOWN(r_stval());
+    printf("Error va: %p\n",va);
+    if (va > MAXVA || va > p->sz) {
+      // sanity check安全检查
+      p->killed = 1;
+      goto kill;
+    }
+    // 寻找对应vma
+    struct proc *p=myproc();
+    struct vma *v = 0;
+    int pos=0;
+    for(;pos<16;pos++)
+    {
+      if(p->vmas[pos].used && va>=p->vmas[pos].vaddr && va<(p->vmas[pos].vaddr+p->vmas[pos].length))
+      {
+        v = &p->vmas[pos];
+        break;
+      }
+    }
+    if(!v)
+    {
+      p->killed = 1;
+      goto kill;
+    }
+
+    // 分配页
+    char *mem;
+    if((mem = kalloc()) == 0)
+    {
+      p->killed = 1;
+      goto kill;
+    }
+    memset(mem, 0, PGSIZE);
+    
+    // 创建页表条目
+    int flags = PTE_U | (v->prot & PROT_READ ? PTE_R : 0) | (v->prot & PROT_WRITE ? PTE_W : 0);
+    //从inode读取数据。调用者必须持有ip->lock锁。如果user_dst==1，则dst是用户虚拟地址；否则，dst是内核地址。readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
+    uint offset = va - v->vaddr;
+    ilock(v->file->ip);
+    readi(v->file->ip, 0, (uint64)mem, offset, PGSIZE);
+    iunlock(v->file->ip);
+
+    // 映射页表mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+    if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags)<0)
+    {
+      kfree((void *)mem);
+      p->killed = 1;
+      goto kill;
+    }
+  } 
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+kill:
   if(p->killed)
     exit(-1);
 
